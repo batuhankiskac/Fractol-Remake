@@ -88,12 +88,39 @@ void handle_events(GraphicsContext *ctx, void (*render_cb)(GraphicsContext *)) {
         else if (ev.type == KeyPress) {
             KeySym ks = XLookupKeysym(&ev.xkey, 0);
             if (ks == XK_q) break;
-            // iteration controls via main and keypad
-            else if (ks == XK_plus || ks == XK_equal || ks == XK_KP_Add) { ctx->max_iter += 50; render_cb(ctx); }
-            else if (ks == XK_minus || ks == XK_KP_Subtract) { ctx->max_iter = ctx->max_iter > 50 ? ctx->max_iter - 50 : ctx->max_iter; render_cb(ctx); }
-            // cycle color palettes with space
+            // iteration controls via main keys only
+            if (ks == XK_plus || ks == XK_equal) {
+                ctx->max_iter += 50;
+                render_cb(ctx);
+            } else if (ks == XK_minus) {
+                ctx->max_iter = ctx->max_iter > 50 ? ctx->max_iter - 50 : ctx->max_iter;
+                render_cb(ctx);
+            }
+            // zoom with keypad only
+            else if (ks == XK_KP_Add || ks == XK_KP_Subtract) {
+                double factor = (ks == XK_KP_Add) ? 0.9 : 1.1;
+                double cx = (ctx->x_min + ctx->x_max) / 2;
+                double cy = (ctx->y_min + ctx->y_max) / 2;
+                double new_width = (ctx->x_max - ctx->x_min) * factor;
+                double new_height = (ctx->y_max - ctx->y_min) * factor;
+                // allow even deeper zoom with adjusted threshold
+                if (new_width > 1e-20 && new_height > 1e-20) {
+                    ctx->x_min = cx - new_width/2;
+                    ctx->x_max = cx + new_width/2;
+                    ctx->y_min = cy - new_height/2;
+                    ctx->y_max = cy + new_height/2;
+                    // adjust iterations based on zoom level
+                    if (factor < 1.0) {
+                        ctx->max_iter += 25;  // increase for deeper zoom
+                    } else {
+                        ctx->max_iter = ctx->max_iter > 50 ? ctx->max_iter - 25 : ctx->max_iter;
+                    }
+                    render_cb(ctx);
+                }
+            }
+            // cycle color palettes with space (now 5 palettes)
             else if (ks == XK_space) {
-                ctx->palette_index = (ctx->palette_index + 1) % 3;
+                ctx->palette_index = (ctx->palette_index + 1) % 5;
                 init_palette(ctx);
                 render_cb(ctx);
             }
@@ -132,18 +159,30 @@ void handle_events(GraphicsContext *ctx, void (*render_cb)(GraphicsContext *)) {
                 XQueryPointer(ctx->display, ctx->window, &root, &child,
                               &root_x, &root_y, &win_x, &win_y, &mask);
                 double factor = (ev.xbutton.button == Button4) ? 0.9 : 1.1;
-                // world bounds
-                double x0 = ctx->x_min, x1 = ctx->x_max;
-                double y0 = ctx->y_min, y1 = ctx->y_max;
-                // compute world coord under mouse
-                double cx = x0 + win_x * (x1 - x0) / ctx->width;
-                double cy = y0 + win_y * (y1 - y0) / ctx->height;
-                // scale around cursor: adjust bounds
-                ctx->x_min = cx - (cx - x0) * factor;
-                ctx->x_max = cx + (x1 - cx) * factor;
-                ctx->y_min = cy - (cy - y0) * factor;
-                ctx->y_max = cy + (y1 - cy) * factor;
-                render_cb(ctx);
+                // current view dimensions
+                double old_width = ctx->x_max - ctx->x_min;
+                double old_height = ctx->y_max - ctx->y_min;
+                // mouse position as ratio of window size [0,1]
+                double mouse_x_ratio = (double)win_x / ctx->width;
+                double mouse_y_ratio = (double)win_y / ctx->height;
+                // new dimensions
+                double new_width = old_width * factor;
+                double new_height = old_height * factor;
+                // maintain mouse position in world coords
+                ctx->x_min = ctx->x_min + mouse_x_ratio * (old_width - new_width);
+                ctx->x_max = ctx->x_min + new_width;
+                ctx->y_min = ctx->y_min + mouse_y_ratio * (old_height - new_height);
+                ctx->y_max = ctx->y_min + new_height;
+                // allow even deeper zoom with adjusted threshold
+                if (new_width > 1e-20 && new_height > 1e-20) {
+                    // adjust iterations based on zoom level
+                    if (factor < 1.0) {
+                        ctx->max_iter += 25;  // increase for deeper zoom
+                    } else {
+                        ctx->max_iter = ctx->max_iter > 50 ? ctx->max_iter - 25 : ctx->max_iter;
+                    }
+                    render_cb(ctx);
+                }
             }
         }
     }
